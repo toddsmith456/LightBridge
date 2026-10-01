@@ -29,7 +29,7 @@ This is an independent application, not an official Decimen product.
 
 ## Using it
 
-1. Install the signed APK from the repository's **Releases** page on Android 7.0+ (API 24) and
+1. Install the signed APK from the repository's **Releases** page (once the first signed release is published) on Android 7.0+ (API 24) and
    verify it (`sha256sum -c`, `apksigner verify --print-certs`; see [docs/RELEASING.md](docs/RELEASING.md)).
    CI also publishes a **lightbridge-debug** artifact for development only; it is signed with
    Android's public debug key and can never update a release install.
