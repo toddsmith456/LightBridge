@@ -71,6 +71,13 @@ def pom(group: str, artifact: str, version: str) -> ET.Element | None:
     return None
 
 
+def is_bom(group: str, artifact: str, version: str) -> bool:
+    """A constraints-only BOM POM ships no code and (for androidx) declares no license."""
+    root = pom(group, artifact, version)
+    return (artifact.endswith("-bom") and root is not None
+            and (root.findtext("packaging") or "").strip() == "pom" and root.find("dependencies") is None)
+
+
 def licenses(group: str, artifact: str, version: str, depth: int = 0) -> list[str]:
     root = pom(group, artifact, version)
     if root is None:
@@ -109,8 +116,8 @@ def main() -> int:
     for (g, a, v), res in zip(deps, results):
         ids = [x["id"] for x in res.get("vulns", [])]
         open_ids = [x for x in ids if x not in waived]
-        lic = licenses(g, a, v)
-        lic_ok = bool(lic) and all(any(w in n.lower() for w in ALLOWED_LICENSE_WORDS) for n in lic)
+        lic = ["n/a (BOM: version constraints only, no code)"] if is_bom(g, a, v) else licenses(g, a, v)
+        lic_ok = bool(lic) and lic[0].startswith("n/a (BOM") or bool(lic) and all(any(w in n.lower() for w in ALLOWED_LICENSE_WORDS) for n in lic)
         inventory.append(f"| {g}:{a} | {v} | {'; '.join(lic) or 'UNKNOWN'} | {', '.join(ids) or 'none'} |")
         if open_ids:
             errors.append(f"{g}:{a}:{v} has advisories {open_ids}")
