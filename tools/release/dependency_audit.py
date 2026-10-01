@@ -115,9 +115,12 @@ def main() -> int:
         if open_ids:
             errors.append(f"{g}:{a}:{v} has advisories {open_ids}")
         if not lic_ok:
-            errors.append(f"{g}:{a}:{v} license not on the allowlist: {lic or 'UNKNOWN'}")
+            found = pom(g, a, v) is not None
+            errors.append(f"{g}:{a}:{v} license not on the allowlist: {lic or 'UNKNOWN'} (pom found: {found})")
     Path("dependency-inventory.md").write_text("\n".join(inventory) + "\n")
     print("\n".join(inventory))
+    # Also surface the inventory as an annotation so it is readable without downloading artifacts.
+    print("::notice title=dependency inventory::" + "%0A".join(inventory))
     for e in errors:
         print(f"::error::dependency audit: {e}")
     if not errors:
