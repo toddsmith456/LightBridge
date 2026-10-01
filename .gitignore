@@ -28,3 +28,6 @@ keystore.properties
 # Python
 __pycache__/
 *.pyc
+
+# Never commit the accidental 34 MiB jdk4py wheel (see git history cleanup)
+*.whl
