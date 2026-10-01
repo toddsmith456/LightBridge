@@ -29,8 +29,10 @@ This is an independent application, not an official Decimen product.
 
 ## Using it
 
-1. Install the debug APK from this branch's **CI → lightbridge-debug** artifact on Android
-   7.0+ (API 24). Debug builds are for evaluation, not a production signing identity.
+1. Install the signed APK from the repository's **Releases** page on Android 7.0+ (API 24) and
+   verify it (`sha256sum -c`, `apksigner verify --print-certs`; see [docs/RELEASING.md](docs/RELEASING.md)).
+   CI also publishes a **lightbridge-debug** artifact for development only; it is signed with
+   Android's public debug key and can never update a release install.
 2. On the sender, choose **Send → Choose a file**, or enter text.
 3. On the other device, choose **Receive**, allow the camera, and point at the full QR.
 4. Keep sending until the receiver says **Every byte, verified**. Use **Save as…** or
@@ -74,16 +76,19 @@ python3 tools/palette_lab.py --verify
 ```
 
 The checked-in Gradle wrapper uses Gradle 8.13. CI runs tests, lint, palette checks,
-and debug + minified release assembly. Output:
+manifest and dependency gates, debug + minified release assembly, and an emulator matrix. Output:
 
 - `app/build/outputs/apk/debug/app-debug.apk` — installable development build
 - `app/build/outputs/apk/release/app-release-unsigned.apk` — **unsigned** release
 
-For a production release, sign with your own securely managed release key using
-Android's `apksigner` (or configure a private signing pipeline). Never ship with the
-public debug identity or commit signing keys. The manual release-candidate workflow
-produces unsigned APK/AAB artifacts and a shrinker mapping; it does not publish a
-GitHub/Play release or claim the device checklist has passed.
+Production signing happens only in the tag-triggered **Release** workflow, using a key stored as
+GitHub environment secrets (set up locally with `tools/setup-release-signing.sh`; the key is never
+typed into chat, a command line or the repository). The workflow re-runs every test, lint and
+security gate, signs with `apksigner`, verifies the certificate against a pinned SHA-256, installs
+the *signed* APK on Android 7/12/15/16 emulators, and only then publishes the APK, checksum, R8
+mapping and dependency inventory. There is no debug-key fallback. Details:
+[docs/RELEASING.md](docs/RELEASING.md). Emulator gates do not replace the physical two-device checks
+in the [release checklist](docs/RELEASE-CHECKLIST.md).
 
 ## Architecture
 

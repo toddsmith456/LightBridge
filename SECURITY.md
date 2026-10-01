@@ -19,6 +19,9 @@ Uninstalling removes the inbox; explicit exports are outside app control. Deleti
 not guarantee secure erasure. A hostile stream can consume bounded resources or waste
 time; users can reset. Very large transfers may exceed low-RAM device capabilities.
 
-Before distribution: execute docs/RELEASE-CHECKLIST.md, audit dependency advisories,
-review licenses, and sign with a private release key. A successful CI build alone is not
-a security audit or proof of real-camera interoperability.
+Release integrity: official APKs are built from a tag on `main`, signed in CI with a private key held
+only in GitHub environment secrets and an offline backup, and verified against a pinned certificate
+fingerprint (`LIGHTBRIDGE_CERT_SHA256`). Verify downloads with `apksigner verify --print-certs` and the
+published `.sha256`. Each release runs an OSV advisory and license audit and a packaged-manifest gate.
+Before announcing a release also execute the physical-device items of docs/RELEASE-CHECKLIST.md. CI is
+not a security audit or proof of real-camera interoperability.
