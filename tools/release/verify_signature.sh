@@ -13,9 +13,9 @@ grep -q 'Number of signers: 1' <<<"$report" || { echo "::error::expected exactly
 if grep -qiE 'Android Debug|CN=Android' <<<"$report"; then
   echo "::error::APK is signed with an Android debug certificate"; exit 1
 fi
-# apksigner prints "Signer #1 certificate SHA-256 digest:" (v1/v2) and "Signer (minSdkVersion=…)
+# apksigner prints "Signer #1 certificate SHA-256 digest:" (v1/v2), "V3.0 Signer: certificate SHA-256 digest:" (v3) or "Signer (minSdkVersion=…)
 # certificate SHA-256 digest:" (v3). Every digest reported must equal the pinned one.
-mapfile -t digests < <(sed -n 's/^Signer.* certificate SHA-256 digest: *//p' <<<"$report" | tr -d ': ' | tr 'A-F' 'a-f')
+mapfile -t digests < <(sed -n 's/^.*[Ss]igner.*certificate SHA-256 digest: *//p' <<<"$report" | tr -d ': ' | tr 'A-F' 'a-f')
 if [ "${#digests[@]}" -eq 0 ]; then
   echo "::error::apksigner reported no certificate digest. Report: $(sed 's/%/%25/g' <<<"$report" | tr '\n' '|' | cut -c1-1500)"; exit 1
 fi
