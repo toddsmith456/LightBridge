@@ -13,9 +13,15 @@ grep -q 'Number of signers: 1' <<<"$report" || { echo "::error::expected exactly
 if grep -qiE 'Android Debug|CN=Android' <<<"$report"; then
   echo "::error::APK is signed with an Android debug certificate"; exit 1
 fi
-actual="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<<"$report" | tr -d ': ' | tr 'A-F' 'a-f')"
-if [ "$actual" != "$expected" ]; then
-  echo "::error::certificate SHA-256 mismatch. expected=$expected actual=$actual"; exit 1
-fi
+# apksigner prints "Signer #1 certificate SHA-256 digest:" (v1/v2) and "Signer (minSdkVersion=…)
+# certificate SHA-256 digest:" (v3). Every digest reported must equal the pinned one.
+mapfile -t digests < <(sed -n 's/^Signer.* certificate SHA-256 digest: *//p' <<<"$report" | tr -d ': ' | tr 'A-F' 'a-f')
+[ "${#digests[@]}" -gt 0 ] || { echo "::error::apksigner reported no certificate digest"; exit 1; }
+for actual in "${digests[@]}"; do
+  if [ "$actual" != "$expected" ]; then
+    echo "::error::certificate SHA-256 mismatch. expected=$expected actual=$actual"; exit 1
+  fi
+done
+actual="${digests[0]}"
 "$bt/zipalign" -c -P 16 4 "$apk"
 echo "signature OK: cert SHA-256 $actual"
