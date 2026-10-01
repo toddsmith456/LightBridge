@@ -77,7 +77,7 @@ def is_bom(group: str, artifact: str, version: str) -> bool:
     if not artifact.endswith("-bom") or root is None:
         return False
     tags = [c.tag for c in root]
-    print(f"BOM {group}:{artifact}: packaging={root.findtext('packaging')!r} children={tags}")
+    print(f"::notice title=bom::BOM {group}:{artifact}: packaging={root.findtext('packaging')!r} children={tags}")
     declared_deps = root.findall("./dependencies/dependency")
     return (root.findtext("packaging") or "").strip() == "pom" and not declared_deps
 
