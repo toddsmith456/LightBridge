@@ -16,7 +16,9 @@ fi
 # apksigner prints "Signer #1 certificate SHA-256 digest:" (v1/v2) and "Signer (minSdkVersion=…)
 # certificate SHA-256 digest:" (v3). Every digest reported must equal the pinned one.
 mapfile -t digests < <(sed -n 's/^Signer.* certificate SHA-256 digest: *//p' <<<"$report" | tr -d ': ' | tr 'A-F' 'a-f')
-[ "${#digests[@]}" -gt 0 ] || { echo "::error::apksigner reported no certificate digest"; exit 1; }
+if [ "${#digests[@]}" -eq 0 ]; then
+  echo "::error::apksigner reported no certificate digest. Report: $(sed 's/%/%25/g' <<<"$report" | tr '\n' '|' | cut -c1-1500)"; exit 1
+fi
 for actual in "${digests[@]}"; do
   if [ "$actual" != "$expected" ]; then
     echo "::error::certificate SHA-256 mismatch. expected=$expected actual=$actual"; exit 1
