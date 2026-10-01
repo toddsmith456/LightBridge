@@ -74,8 +74,12 @@ def pom(group: str, artifact: str, version: str) -> ET.Element | None:
 def is_bom(group: str, artifact: str, version: str) -> bool:
     """A constraints-only BOM POM ships no code and (for androidx) declares no license."""
     root = pom(group, artifact, version)
-    return (artifact.endswith("-bom") and root is not None
-            and (root.findtext("packaging") or "").strip() == "pom" and root.find("dependencies") is None)
+    if not artifact.endswith("-bom") or root is None:
+        return False
+    tags = [c.tag for c in root]
+    print(f"BOM {group}:{artifact}: packaging={root.findtext('packaging')!r} children={tags}")
+    declared_deps = root.findall("./dependencies/dependency")
+    return (root.findtext("packaging") or "").strip() == "pom" and not declared_deps
 
 
 def licenses(group: str, artifact: str, version: str, depth: int = 0) -> list[str]:
