@@ -65,7 +65,10 @@ def pom(group: str, artifact: str, version: str) -> ET.Element | None:
     for repo in REPOS:
         try:
             xml = http(f"{repo}/{path}").decode()
-            return ET.fromstring(re.sub(r'\sxmlns="[^"]+"', "", xml, count=1))
+            root = ET.fromstring(xml)
+            for el in root.iter():  # drop any XML namespace so plain tag names work
+                el.tag = el.tag.rsplit("}", 1)[-1]
+            return root
         except urllib.error.HTTPError:
             continue
     return None
@@ -76,8 +79,6 @@ def is_bom(group: str, artifact: str, version: str) -> bool:
     root = pom(group, artifact, version)
     if not artifact.endswith("-bom") or root is None:
         return False
-    tags = [c.tag for c in root]
-    print(f"::notice title=bom::BOM {group}:{artifact}: packaging={root.findtext('packaging')!r} children={tags}")
     declared_deps = root.findall("./dependencies/dependency")
     return (root.findtext("packaging") or "").strip() == "pom" and not declared_deps
 
@@ -120,7 +121,9 @@ def main() -> int:
     for (g, a, v), res in zip(deps, results):
         ids = [x["id"] for x in res.get("vulns", [])]
         open_ids = [x for x in ids if x not in waived]
-        lic = ["n/a (BOM: version constraints only, no code)"] if is_bom(g, a, v) else licenses(g, a, v)
+        lic = licenses(g, a, v)
+        if not lic and is_bom(g, a, v):
+            lic = ["n/a (BOM: version constraints only, no code)"]
         lic_ok = bool(lic) and lic[0].startswith("n/a (BOM") or bool(lic) and all(any(w in n.lower() for w in ALLOWED_LICENSE_WORDS) for n in lic)
         inventory.append(f"| {g}:{a} | {v} | {'; '.join(lic) or 'UNKNOWN'} | {', '.join(ids) or 'none'} |")
         if open_ids:
