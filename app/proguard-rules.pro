@@ -1,4 +1,4 @@
-# Youniversal demo app — R8/ProGuard rules for the release build.
+# LightBridge — R8/ProGuard rules for the release build.
 #
 # Compose and Material 3 ship their own consumer rules, so this file stays deliberately small.
 # Anything added here should be a workaround for a specific shrinking problem, not a guess.

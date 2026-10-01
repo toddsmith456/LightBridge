@@ -1,26 +1,175 @@
-name: Release candidate
+name: Release
+# Publishes a SIGNED LightBridge APK to GitHub Releases when a v*.*.* tag is pushed.
+#
+#   validate  full tests, lint, minified unsigned release build, security + dependency gates
+#   sign      signs with the private key from the `release` environment secrets, verifies the
+#             signature against the pinned certificate fingerprint (no debug-key fallback)
+#   device    installs the SIGNED apk on emulators (Android 7 / 12 / 15 / 16) and launches it
+#   publish   creates the GitHub release with the APK, checksum, R8 mapping and audit records
+#
+# Any failed gate stops the release. One-time key setup: tools/setup-release-signing.sh
+# (docs/RELEASING.md). Secrets are never printed, passed on a command line, or uploaded.
 on:
-  workflow_dispatch:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+', 'v[0-9]+.[0-9]+.[0-9]+-*']
 permissions:
   contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  candidate:
+  validate:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      code: ${{ steps.v.outputs.code }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tag must be on main and be a clean semantic version
+        id: v
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "::error::tag $GITHUB_REF_NAME is not on main; release from main only"; exit 1; }
+          version="${GITHUB_REF_NAME#v}"
+          [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::bad version $version"; exit 1; }
+          code=$(( BASH_REMATCH[1] * 1000000 + BASH_REMATCH[2] * 10000 + BASH_REMATCH[3] * 100 ))
+          echo "version=$version" >> "$GITHUB_OUTPUT"; echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version (versionCode $code)"
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
-        with:
-          cache-read-only: false
-      - run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;35.0.0"' 
-      - run: ./gradlew :transfer:test :app:testDebugUnitTest :app:lintRelease :app:assembleRelease :app:bundleRelease
+      - run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;35.0.0"'
+      - name: Theme contrast and generator parity
+        run: |
+          python3 tools/palette_lab.py
+          python3 tools/palette_lab.py --verify
+      - name: Tests, lint and minified unsigned release
+        run: >
+          ./gradlew :transfer:test :youniversal:testDebugUnitTest :app:testDebugUnitTest
+          :app:lintDebug :app:lintRelease :app:assembleDebug :app:assembleRelease --stacktrace
+          -Plightbridge.versionName=${{ steps.v.outputs.version }}
+          -Plightbridge.versionCode=${{ steps.v.outputs.code }}
+      - name: Manifest security gate
+        run: python3 tools/release/manifest_gate.py app/build/outputs/apk/release/app-release-unsigned.apk
+      - name: Dependency advisories and licenses (OSV)
+        run: python3 tools/release/dependency_audit.py
+      - name: Packaged version matches the tag
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest version-name app/build/outputs/apk/release/app-release-unsigned.apk | grep -Fx "${{ steps.v.outputs.version }}"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest version-code app/build/outputs/apk/release/app-release-unsigned.apk | grep -Fx "${{ steps.v.outputs.code }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: lightbridge-unsigned-release-candidate
+          name: unsigned-release
+          retention-days: 7
           path: |
-            app/build/outputs/apk/release/*.apk
-            app/build/outputs/bundle/release/*.aab
+            app/build/outputs/apk/release/app-release-unsigned.apk
             app/build/outputs/mapping/release/mapping.txt
+            dependency-inventory.md
+            app/build/reports/lint-results-release.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debug-apk-for-conflict-check
+          retention-days: 1
+          path: app/build/outputs/apk/debug/app-debug.apk
+
+  sign:
+    needs: validate
+    runs-on: ubuntu-latest
+    # Secrets live in the `release` environment; add required reviewers there for a manual gate.
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: unsigned-release
+          path: unsigned
+      - run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;35.0.0"'
+      - name: Sign with the private release key and verify against the pinned certificate
+        env:
+          LIGHTBRIDGE_KEYSTORE_BASE64: ${{ secrets.LIGHTBRIDGE_KEYSTORE_BASE64 }}
+          LIGHTBRIDGE_KEYSTORE_PASSWORD: ${{ secrets.LIGHTBRIDGE_KEYSTORE_PASSWORD }}
+          LIGHTBRIDGE_KEY_PASSWORD: ${{ secrets.LIGHTBRIDGE_KEY_PASSWORD }}
+          LIGHTBRIDGE_KEY_ALIAS: ${{ secrets.LIGHTBRIDGE_KEY_ALIAS }}
+          LIGHTBRIDGE_CERT_SHA256: ${{ vars.LIGHTBRIDGE_CERT_SHA256 }}
+        run: |
+          mkdir -p out
+          tools/release/sign_apk.sh unsigned/app/build/outputs/apk/release/app-release-unsigned.apk \
+            "out/LightBridge-${{ needs.validate.outputs.version }}.apk"
+          (cd out && sha256sum "LightBridge-${{ needs.validate.outputs.version }}.apk" | tee "LightBridge-${{ needs.validate.outputs.version }}.apk.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-release
+          retention-days: 7
+          path: out/*
+
+  device:
+    name: device (API ${{ matrix.api }})
+    needs: [validate, sign]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        api: [24, 31, 35, 36]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed-release
+          path: signed
+      - uses: actions/download-artifact@v4
+        with:
+          name: debug-apk-for-conflict-check
+          path: debug
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          arch: x86_64
+          target: ${{ matrix.api >= 36 && 'google_apis' || 'default' }}
+          disable-animations: true
+          script: tools/release/device_smoke.sh signed/LightBridge-${{ needs.validate.outputs.version }}.apk debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-device-api${{ matrix.api }}
+          path: |
+            logcat-api*.txt
+            screenshot-api*.png
+
+  publish:
+    needs: [validate, sign, device]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed-release
+          path: assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: unsigned-release
+          path: unsigned
+      - name: Collect release assets
+        run: |
+          cp unsigned/app/build/outputs/mapping/release/mapping.txt "assets/LightBridge-${{ needs.validate.outputs.version }}-r8-mapping.txt"
+          cp unsigned/dependency-inventory.md "assets/LightBridge-${{ needs.validate.outputs.version }}-dependencies.md"
+          ls -l assets
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=""; [[ "$GITHUB_REF_NAME" == *-* ]] && pre="--prerelease"
+          gh release create "$GITHUB_REF_NAME" assets/* --verify-tag $pre \
+            --title "LightBridge ${{ needs.validate.outputs.version }}" --generate-notes

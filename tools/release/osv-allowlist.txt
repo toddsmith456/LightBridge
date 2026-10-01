@@ -1,0 +1,2 @@
+# Waivers for OSV advisories, one per line:  ADVISORY-ID  reason (who accepted it and why, plus review date)
+# Intentionally empty: any advisory on the shipped classpath blocks a release until fixed or waived here.

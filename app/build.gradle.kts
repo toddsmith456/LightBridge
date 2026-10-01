@@ -13,8 +13,9 @@ android {
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionCode = 1
-        versionName = libs.versions.youniversal.get()
+        // Overridden by the release workflow from the pushed v* tag; see docs/RELEASING.md.
+        versionCode = (project.findProperty("lightbridge.versionCode") as String).toInt()
+        versionName = project.findProperty("lightbridge.versionName") as String
 
         vectorDrawables.useSupportLibrary = false
     }
@@ -27,8 +28,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            // Never publish a production APK signed with Android's public debug identity.
-            // Supply signing through your private release pipeline; default output is unsigned.
+            // Deliberately no signingConfig: Gradle's release output stays UNSIGNED and is never
+            // signed with Android's public debug identity. The release workflow signs it with
+            // apksigner using a key held only in GitHub secrets (docs/RELEASING.md).
         }
     }
 
@@ -39,6 +41,13 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    lint {
+        abortOnError = true
+        checkReleaseBuilds = true
+        checkDependencies = true
+        sarifReport = true
     }
 }
 

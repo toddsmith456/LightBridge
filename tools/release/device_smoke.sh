@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Install and launch the SIGNED, R8-minified release APK on the running emulator/device and
+# check the things only a real install can prove. Run inside android-emulator-runner.
+#
+# usage: device_smoke.sh signed.apk [debug.apk-for-signature-conflict-check]
+set -euo pipefail
+apk="${1:?signed apk}"; debug_apk="${2:-}"
+pkg=dev.lightbridge.app
+adb wait-for-device
+sdk="$(adb shell getprop ro.build.version.sdk | tr -d '\r')"
+echo "== device API $sdk"
+
+adb uninstall "$pkg" >/dev/null 2>&1 || true
+adb install "$apk"
+echo "== upgrade-in-place with the same signature must work"
+adb install -r "$apk"
+
+dump="$(adb shell dumpsys package "$pkg")"
+if grep -qE 'flags=\[.*DEBUGGABLE' <<<"$dump"; then echo "::error::installed release APK is debuggable"; exit 1; fi
+grep -q 'android.permission.INTERNET' <<<"$dump" && { echo "::error::INTERNET granted/requested on device"; exit 1; }
+
+adb shell pm grant "$pkg" android.permission.CAMERA || true
+adb logcat -c
+adb shell am start -W -n "$pkg/.MainActivity" | tee /tmp/start.txt
+grep -q 'Status: ok' /tmp/start.txt || { echo "::error::MainActivity did not start"; exit 1; }
+sleep 8
+adb shell pidof "$pkg" >/dev/null || { echo "::error::app process is not running 8 s after launch"; adb logcat -d | tail -80; exit 1; }
+
+echo "== rotate, background and foreground"
+adb shell settings put system accelerometer_rotation 0
+for r in 1 0 1 0; do adb shell settings put system user_rotation "$r"; sleep 1; done
+adb shell input keyevent KEYCODE_HOME; sleep 2
+adb shell am start -n "$pkg/.MainActivity"; sleep 3
+adb shell pidof "$pkg" >/dev/null || { echo "::error::app died after rotate/background"; adb logcat -d | tail -80; exit 1; }
+
+adb logcat -d > "logcat-api$sdk.txt"
+adb exec-out screencap -p > "screenshot-api$sdk.png" || true
+if grep -A6 -E 'FATAL EXCEPTION|ANR in' "logcat-api$sdk.txt" | grep -q "$pkg"; then
+  echo "::error::crash/ANR of $pkg in logcat (see artifact)"; grep -A12 -E 'FATAL EXCEPTION|ANR in' "logcat-api$sdk.txt" | head -40; exit 1
+fi
+
+if [ -n "$debug_apk" ]; then
+  echo "== a debug-signed build must NOT be able to replace the release install"
+  if adb install -r -d "$debug_apk" 2>&1 | tee /tmp/conflict.txt | grep -q 'INSTALL_FAILED_UPDATE_INCOMPATIBLE'; then
+    echo "signature conflict correctly rejected"
+  else
+    echo "::error::debug APK was accepted over the release install (signing identities not distinct)"; cat /tmp/conflict.txt; exit 1
+  fi
+fi
+adb uninstall "$pkg"
+echo "device smoke OK on API $sdk"
