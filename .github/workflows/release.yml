@@ -135,6 +135,7 @@ jobs:
         with:
           api-level: ${{ matrix.api }}
           arch: x86_64
+          profile: pixel_5
           target: ${{ matrix.api >= 36 && 'google_apis' || 'default' }}
           disable-animations: true
           script: tools/release/device_smoke.sh signed/LightBridge-${{ needs.validate.outputs.version }}.apk debug/app-debug.apk

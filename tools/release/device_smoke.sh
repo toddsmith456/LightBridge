@@ -9,6 +9,7 @@ pkg=dev.lightbridge.app
 adb wait-for-device
 sdk="$(adb shell getprop ro.build.version.sdk | tr -d '\r')"
 echo "== device API $sdk"
+echo "::notice title=emulator display API $sdk::$(adb shell wm size | tr -d '\r') $(adb shell wm density | tr -d '\r')"
 
 adb uninstall "$pkg" >/dev/null 2>&1 || true
 adb install "$apk"
@@ -41,10 +42,13 @@ fi
 
 if [ -n "$debug_apk" ]; then
   echo "== a debug-signed build must NOT be able to replace the release install"
-  if adb install -r -d "$debug_apk" 2>&1 | tee /tmp/conflict.txt | grep -q 'INSTALL_FAILED_UPDATE_INCOMPATIBLE'; then
+  # Capture first: `adb install | grep -q` would trip pipefail when grep exits early.
+  conflict="$(adb install -r -d "$debug_apk" 2>&1 || true)"
+  echo "$conflict"
+  if grep -q 'INSTALL_FAILED_UPDATE_INCOMPATIBLE' <<<"$conflict"; then
     echo "signature conflict correctly rejected"
   else
-    echo "::error::debug APK was accepted over the release install (signing identities not distinct)"; cat /tmp/conflict.txt; exit 1
+    echo "::error::debug APK was not rejected with INSTALL_FAILED_UPDATE_INCOMPATIBLE: $(tr '\n' ' ' <<<"$conflict")"; exit 1
   fi
 fi
 adb uninstall "$pkg"

@@ -122,6 +122,7 @@ jobs:
         with:
           api-level: ${{ matrix.api }}
           arch: x86_64
+          profile: pixel_5
           target: ${{ matrix.api >= 36 && 'google_apis' || 'default' }}
           disable-animations: true
           script: bash tools/release/emulator_checks.sh

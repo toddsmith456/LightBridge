@@ -26,13 +26,13 @@ class AppSmokeTest {
         compose.waitUntil(5000) { !vm.receivedFile(receipt).exists() }
     }
     @Test fun homeSendInboxAndSettingsAreReachable() {
-        compose.onNodeWithText("A little light.\nA direct connection.").assertIsDisplayed()
+        compose.onNodeWithText("A little light.\nA direct connection.").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Send", useUnmergedTree = true).performClick()
-        compose.onNodeWithText("Choose a file").assertIsDisplayed()
+        compose.onNodeWithText("Choose a file").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Inbox", useUnmergedTree = true).performClick()
-        compose.onNodeWithText("Your inbox").assertIsDisplayed()
+        compose.onNodeWithText("Your inbox").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Settings", useUnmergedTree = true).performClick()
-        compose.onNodeWithText("Make it yours.").assertIsDisplayed()
+        compose.onNodeWithText("Make it yours.").performScrollTo().assertIsDisplayed()
     }
     @Test fun textCreatesRealQrAndFinishClearsSender() {
         compose.onNodeWithText("Send", useUnmergedTree = true).performClick()
