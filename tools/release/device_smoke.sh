@@ -23,10 +23,9 @@ if grep -qE 'flags=\[.*DEBUGGABLE' <<<"$dump"; then echo "::error::installed rel
 for bad in ACCESS_BACKGROUND_LOCATION MANAGE_EXTERNAL_STORAGE REQUEST_INSTALL_PACKAGES SYSTEM_ALERT_WINDOW RECORD_AUDIO QUERY_ALL_PACKAGES; do
   grep -q "android.permission.$bad" <<<"$dump" && { echo "::error::$bad present on device"; exit 1; } || true
 done
-# The location permission may exist only in its capped, discovery-only form.
-if grep -q 'android.permission.ACCESS_FINE_LOCATION' <<<"$dump"; then
-  grep -q 'ACCESS_FINE_LOCATION.*maxSdkVersion' <<<"$dump" ||     { echo "::error::ACCESS_FINE_LOCATION is uncapped on device"; exit 1; }
-fi
+# maxSdkVersion is a manifest-time property and is not retained in dumpsys package. The packaged
+# manifest gate checks that ACCESS_FINE_LOCATION and ACCESS_COARSE_LOCATION are capped at API 32;
+# on an installed package we check only the effective capability set and the deny list above.
 echo "posture: network permission scoped to the peer-to-peer Link tab; no widened capabilities present"
 
 adb shell pm grant "$pkg" android.permission.CAMERA || true
