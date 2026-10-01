@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Launcher background gradient stops -->
+    <color name="ic_launcher_background_start">#FF3E63DD</color>
+    <color name="ic_launcher_background_end">#FF0F9C8E</color>
+    <color name="ic_launcher_mark">#FFFFFFFF</color>
+</resources>

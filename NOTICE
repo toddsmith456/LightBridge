@@ -1,0 +1,27 @@
+LightBridge
+Copyright (c) 2026 Todd Smith and the LightBridge contributors.
+Application source is licensed under MIT; see LICENSE.
+
+Youniversal: Copyright (c) 2026 Todd Smith and the Youniversal contributors (MIT).
+Theme module and theme panel retained/adapted with their original license.
+
+Decimen Optical Transfer v0.3.0:
+Copyright (c) 2026 Evan Crawley (Bash Alarmist) (MIT).
+https://github.com/bashalarmistalt/decimen-optical-transfer/tree/v0.3.0
+Reference commit: 29cba8fa25dd160c8b6aa18fe3b48fbc5bde2e36
+Fountain math, DCF2 container and binary frame protocol, and golden test vectors
+ported to Kotlin from this MIT release. Original license: docs/licenses/DECIMEN-MIT.txt.
+Portions of v0.3.0 contributed by Steve Dakh under MIT are also credited here:
+Copyright (c) 2026 Steve Dakh. The MIT permission and warranty terms in LICENSE apply.
+No AGPL v0.4.0+ source or decimen-codec binary is included.
+This is an independent native application, not an official Decimen product.
+
+ZXing core 3.5.3: Copyright ZXing authors, Apache License 2.0.
+AndroidX / Jetpack Compose / CameraX: Copyright The Android Open Source Project,
+Apache License 2.0.
+Kotlin and kotlinx.coroutines: Copyright JetBrains s.r.o. and contributors,
+Apache License 2.0.
+Gradle wrapper: Copyright Gradle, Inc., Apache License 2.0.
+The Apache 2.0 license text is in docs/licenses/APACHE-2.0.txt.
+Third-party dependencies retain their respective licenses; MIT describes our source,
+not a relicensing of the dependencies.
