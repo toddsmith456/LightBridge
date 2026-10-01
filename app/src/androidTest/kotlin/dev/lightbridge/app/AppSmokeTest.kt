@@ -21,7 +21,20 @@ class AppSmokeTest {
         org.junit.Assert.assertArrayEquals(original, vm.receivedFile(receipt).readBytes())
         val permissions = compose.activity.packageManager.getPackageInfo(
             compose.activity.packageName, android.content.pm.PackageManager.GET_PERMISSIONS).requestedPermissions.orEmpty()
-        org.junit.Assert.assertFalse(permissions.contains(android.Manifest.permission.INTERNET))
+        // INTERNET is required by Android for the Link tab's socket. The posture is that it cannot
+        // reach anything: no other network, storage, location or install permission may accompany it.
+        val never = listOf(
+            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+            android.Manifest.permission.MANAGE_EXTERNAL_STORAGE,
+            android.Manifest.permission.RECORD_AUDIO,
+            android.Manifest.permission.REQUEST_INSTALL_PACKAGES,
+            android.Manifest.permission.SYSTEM_ALERT_WINDOW,
+        )
+        for (p in never) org.junit.Assert.assertFalse("$p must not be requested", permissions.contains(p))
+        org.junit.Assert.assertTrue(
+            "the Link tab needs NEARBY_WIFI_DEVICES for discovery",
+            permissions.contains(android.Manifest.permission.NEARBY_WIFI_DEVICES),
+        )
         vm.delete(receipt)
         compose.waitUntil(5000) { !vm.receivedFile(receipt).exists() }
     }

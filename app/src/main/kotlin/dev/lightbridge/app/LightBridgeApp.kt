@@ -42,6 +42,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.google.zxing.common.BitMatrix
+import dev.lightbridge.app.wifi.WifiLinkViewModel
 import dev.youniversal.theme.YouniversalThemeState
 import kotlinx.coroutines.delay
 import java.text.DateFormat
@@ -49,15 +50,43 @@ import java.util.Date
 import kotlin.math.floor
 
 private enum class Page(val title: String, val glyph: String) {
-    Home("Home", "⌂"), Send("Send", "↑"), Receive("Receive", "↓"), Inbox("Inbox", "▤"), Settings("Settings", "☷")
+    Home("Home", "⌂"), Send("Send", "↑"), Receive("Receive", "↓"), Link("Link", "⇄"),
+    Inbox("Inbox", "▤"), Settings("Settings", "☷")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun LightBridgeApp(vm: TransferViewModel, theme: YouniversalThemeState) {
+internal fun LightBridgeApp(vm: TransferViewModel, link: WifiLinkViewModel, theme: YouniversalThemeState) {
     val state by vm.state.collectAsStateWithLifecycle()
+    val linkState by link.state.collectAsStateWithLifecycle()
+    val receipts by vm.inbox.history.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     var page by rememberSaveable { mutableStateOf(Page.Home) }
     val snackbar = remember { SnackbarHostState() }
+    // One inbox, one set of actions: a receipt behaves the same however it arrived.
+    val actions =
+        remember(vm, context) {
+            InboxActions(
+                save = { receipt, uri -> vm.save(receipt, uri) },
+                delete = { receipt -> vm.delete(receipt) },
+                share = { receipt ->
+                    try {
+                        val uri = FileProvider.getUriForFile(
+                            context, "${context.packageName}.files", vm.receivedFile(receipt), receipt.name,
+                        )
+                        val intent = Intent(Intent.ACTION_SEND).setType(receipt.mime.substringBefore(';'))
+                            .putExtra(Intent.EXTRA_STREAM, uri)
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        intent.clipData = android.content.ClipData.newRawUri(receipt.name, uri)
+                        context.startActivity(Intent.createChooser(intent, "Share ${receipt.name}"))
+                    } catch (e: Exception) {
+                        vm.message(e.message ?: "No app available to share this file.")
+                    }
+                },
+                file = { receipt -> vm.receivedFile(receipt) },
+                message = { message -> vm.message(message) },
+            )
+        }
     BackHandler(page != Page.Home) { page = Page.Home }
     LaunchedEffect(state.message) {
         state.message?.let { snackbar.showSnackbar(it); vm.clearMessage() }
@@ -68,7 +97,7 @@ internal fun LightBridgeApp(vm: TransferViewModel, theme: YouniversalThemeState)
                 OpticalMark(Modifier.size(30.dp))
                 Text("LightBridge", fontWeight = FontWeight.Bold)
             }
-        }, actions = { Text("OFFLINE BY DESIGN", style = MaterialTheme.typography.labelSmall,
+        }, actions = { Text("NO SERVERS · NO ACCOUNTS", style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(end = 16.dp)) }) },
         bottomBar = {
             NavigationBar {
@@ -79,10 +108,12 @@ internal fun LightBridgeApp(vm: TransferViewModel, theme: YouniversalThemeState)
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
             when (page) {
-                Page.Home -> HomeScreen(state, onSend = { page = Page.Send }, onReceive = { page = Page.Receive }, onInbox = { page = Page.Inbox })
+                Page.Home -> HomeScreen(state, receipts.size, onSend = { page = Page.Send },
+                    onReceive = { page = Page.Receive }, onLink = { page = Page.Link }, onInbox = { page = Page.Inbox })
                 Page.Send -> SendScreen(state, vm)
-                Page.Receive -> ReceiveScreen(state.reception, vm)
-                Page.Inbox -> InboxScreen(state.history, vm)
+                Page.Receive -> ReceiveScreen(state.reception, vm, actions)
+                Page.Link -> WifiScreen(linkState, link, actions)
+                Page.Inbox -> InboxScreen(receipts, actions)
                 Page.Settings -> SettingsScreen(state.settings, vm, theme)
             }
         }
@@ -90,17 +121,17 @@ internal fun LightBridgeApp(vm: TransferViewModel, theme: YouniversalThemeState)
 }
 
 @Composable
-private fun ScreenColumn(content: @Composable ColumnScope.() -> Unit) {
+internal fun ScreenColumn(content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp), content = content)
 }
 
 @Composable
-private fun Eyebrow(text: String) = Text(text.uppercase(), style = MaterialTheme.typography.labelMedium,
+internal fun Eyebrow(text: String) = Text(text.uppercase(), style = MaterialTheme.typography.labelMedium,
     color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
 
 @Composable
-private fun Heading(title: String, subtitle: String) {
+internal fun Heading(title: String, subtitle: String) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(title, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
         Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -108,7 +139,7 @@ private fun Heading(title: String, subtitle: String) {
 }
 
 @Composable
-private fun Note(title: String, text: String) {
+internal fun Note(title: String, text: String) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.large) {
         Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(title, style = MaterialTheme.typography.titleSmall)
@@ -118,7 +149,14 @@ private fun Note(title: String, text: String) {
 }
 
 @Composable
-private fun HomeScreen(state: TransferState, onSend: () -> Unit, onReceive: () -> Unit, onInbox: () -> Unit) {
+private fun HomeScreen(
+    state: TransferState,
+    inboxCount: Int,
+    onSend: () -> Unit,
+    onReceive: () -> Unit,
+    onLink: () -> Unit,
+    onInbox: () -> Unit,
+) {
     ScreenColumn {
         Eyebrow("Screen → camera → file")
         Heading("A little light.\nA direct connection.", "Move files between devices with animated QR codes. No Wi-Fi. No Bluetooth. No account.")
@@ -134,12 +172,24 @@ private fun HomeScreen(state: TransferState, onSend: () -> Unit, onReceive: () -
         FilledTonalButton(onReceive, Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("↓  Receive a file", style = MaterialTheme.typography.titleMedium) }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("HOW IT WORKS", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-            TextButton(onInbox) { Text("Inbox · ${state.history.size}") }
+            TextButton(onInbox) { Text("Inbox · $inboxCount") }
         }
         Step("01", "Choose", "Pick a file up to ${formatSize(state.maxFileBytes.toLong())} on this device, or send a text snippet.")
         Step("02", "Point", "Open Receive on the other device. Keep the entire QR code in view.")
         Step("03", "Keep", "We verify every byte before you save or share the received file.")
         Note("Offline, not encrypted", "Anyone who can see the QR stream can receive it. Transfer sensitive files in a private space. SHA-256 checks integrity, not who sent the file.")
+        Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.tertiaryContainer) {
+            Column(Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Need it encrypted?", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "The Link tab pairs two devices over Wi-Fi Direct with a QR code and encrypts the transfer " +
+                        "end to end (ECDH P-256 + AES-256-GCM). Nothing goes through a server, and received files " +
+                        "land in this same inbox.",
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                )
+                Button(onLink, Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("⇄  Open the direct link") }
+            }
+        }
     }
 }
 
@@ -168,7 +218,7 @@ private fun SendScreen(state: TransferState, vm: TransferViewModel) {
     var matrices by remember(sending) { mutableStateOf(emptyList<BitMatrix>()) }
     var emitted by remember(sending) { mutableIntStateOf(0) }
     val lifecycle = LocalLifecycleOwner.current
-    LaunchedEffect(sending, playing, state.settings.fps, state.settings.tiles, lifecycle) {
+    LaunchedEffect(sending, playing, state.settings.fpsTenths, state.settings.tiles, lifecycle) {
         if (sending == null || !playing) return@LaunchedEffect
         lifecycle.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             while (true) {
@@ -177,7 +227,8 @@ private fun SendScreen(state: TransferState, vm: TransferViewModel) {
                 catch (e: kotlinx.coroutines.CancellationException) { throw e }
                 catch (e: Exception) { playing = false; vm.message(e.message ?: "Could not generate QR code."); break }
                 emitted = sending.sequence.get()
-                delay(maxOf(1, 1000L / state.settings.fps - (android.os.SystemClock.elapsedRealtime() - start)))
+                val period = FpsScale.framePeriodMillis(state.settings.fpsTenths)
+                delay(maxOf(1L, period - (android.os.SystemClock.elapsedRealtime() - start)))
             }
         }
     }
@@ -207,7 +258,7 @@ private fun SendScreen(state: TransferState, vm: TransferViewModel) {
             TextButton({ fullscreen = true }, Modifier.fillMaxWidth()) { Text("Expand QR display") }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("${emitted} frames shown", style = MaterialTheme.typography.labelMedium)
-                Text("${state.settings.fps} fps target · ${state.settings.tiles} QR", style = MaterialTheme.typography.labelMedium)
+                Text("${FpsScale.label(state.settings.fpsTenths)} target · ${state.settings.tiles} QR", style = MaterialTheme.typography.labelMedium)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Button({ playing = !playing }, Modifier.weight(1f)) { Text(if (playing) "Pause" else "Resume") }
@@ -241,7 +292,7 @@ private fun SendScreen(state: TransferState, vm: TransferViewModel) {
 }
 
 @Composable
-private fun QrDisplay(matrices: List<BitMatrix>) {
+internal fun QrDisplay(matrices: List<BitMatrix>) {
     val columns = if (matrices.size > 1) 2 else 1
     val rows = if (matrices.size == 4) 2 else 1
     Canvas(Modifier.fillMaxWidth().aspectRatio(if (matrices.size == 2) 2f else 1f)
@@ -259,7 +310,7 @@ private fun QrDisplay(matrices: List<BitMatrix>) {
 }
 
 @Composable
-private fun ReceiveScreen(reception: Reception, vm: TransferViewModel) {
+private fun ReceiveScreen(reception: Reception, vm: TransferViewModel, actions: InboxActions) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current
     fun hasPermission() = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
@@ -281,7 +332,7 @@ private fun ReceiveScreen(reception: Reception, vm: TransferViewModel) {
         Heading(if (reception.receipt != null) "Every byte, verified." else "Point. Hold. Receive.",
             if (reception.receipt != null) "Your file is safely stored in this app’s inbox." else "Keep the full QR code inside the camera view. Missed frames are OK.")
         when {
-            reception.receipt != null -> ReceiptCard(reception.receipt, vm)
+            reception.receipt != null -> ReceiptCard(reception.receipt, actions)
             reception.error != null -> {
                 Note("Transfer stopped", reception.error)
                 Button({ vm.resetReceiver() }, Modifier.fillMaxWidth()) { Text("Try again") }
@@ -322,7 +373,7 @@ private fun ReceiveScreen(reception: Reception, vm: TransferViewModel) {
             }
         }
         if (reception.receipt != null) Button({ vm.resetReceiver() }, Modifier.fillMaxWidth()) { Text("Receive another file") }
-        Text("No network permission. No camera recordings. Partial progress survives rotation, but not app termination.",
+        Text("Camera frames are never recorded or uploaded. The optical path needs no network at all; the Link tab asks for local-network access only for its direct device-to-device socket.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     if (resetConfirm) AlertDialog(onDismissRequest = { resetConfirm = false }, title = { Text("Discard partial transfer?") },
@@ -332,7 +383,7 @@ private fun ReceiveScreen(reception: Reception, vm: TransferViewModel) {
 }
 
 @Composable
-private fun FileSummary(name: String, size: Long, subtitle: String) {
+internal fun FileSummary(name: String, size: Long, subtitle: String) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.large) {
         Row(Modifier.fillMaxWidth().padding(18.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("▤", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.primary)
@@ -345,10 +396,9 @@ private fun FileSummary(name: String, size: Long, subtitle: String) {
 }
 
 @Composable
-private fun ReceiptCard(receipt: Receipt, vm: TransferViewModel) {
-    val context = LocalContext.current
+internal fun ReceiptCard(receipt: Receipt, actions: InboxActions) {
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(receipt.mime.substringBefore(';').takeIf { it.contains('/') } ?: "application/octet-stream")) {
-        if (it != null) vm.save(receipt, it)
+        if (it != null) actions.save(receipt, it)
     }
     var confirm by remember { mutableStateOf(false) }
     ElevatedCard(Modifier.fillMaxWidth()) {
@@ -357,40 +407,32 @@ private fun ReceiptCard(receipt: Receipt, vm: TransferViewModel) {
             Text(receipt.name, style = MaterialTheme.typography.titleLarge)
             Text("${formatSize(receipt.size)} · ${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(receipt.time))}",
                 style = MaterialTheme.typography.bodySmall)
-            Text(receipt.mime, style = MaterialTheme.typography.labelMedium)
+            Text("${receipt.mime} · ${receipt.source.label}", style = MaterialTheme.typography.labelMedium)
             androidx.compose.foundation.text.selection.SelectionContainer {
                 Text(receipt.hash, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button({ save.launch(receipt.name) }, Modifier.weight(1f)) { Text("Save as…") }
-                OutlinedButton({
-                    try {
-                        val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", vm.receivedFile(receipt), receipt.name)
-                        val intent = Intent(Intent.ACTION_SEND).setType(receipt.mime.substringBefore(';'))
-                            .putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        intent.clipData = android.content.ClipData.newRawUri(receipt.name, uri)
-                        context.startActivity(Intent.createChooser(intent, "Share ${receipt.name}"))
-                    } catch (e: Exception) { vm.message(e.message ?: "No app available to share this file.") }
-                }, Modifier.weight(1f)) { Text("Share") }
+                OutlinedButton({ actions.share(receipt) }, Modifier.weight(1f)) { Text("Share") }
             }
             TextButton({ confirm = true }) { Text("Delete from inbox", color = MaterialTheme.colorScheme.error) }
         }
     }
     if (confirm) AlertDialog(onDismissRequest = { confirm = false }, title = { Text("Delete this copy?") },
         text = { Text("${receipt.name} will be removed from LightBridge. Copies you saved elsewhere will not be affected.") },
-        confirmButton = { TextButton({ vm.delete(receipt); confirm = false }) { Text("Delete") } },
+        confirmButton = { TextButton({ actions.delete(receipt); confirm = false }) { Text("Delete") } },
         dismissButton = { TextButton({ confirm = false }) { Text("Cancel") } })
 }
 
 @Composable
-private fun InboxScreen(history: List<Receipt>, vm: TransferViewModel) {
+private fun InboxScreen(history: List<Receipt>, actions: InboxActions) {
     // LazyColumn keeps large inboxes from composing every card and activity-result launcher.
     androidx.compose.foundation.lazy.LazyColumn(Modifier.widthIn(max = 720.dp).fillMaxWidth(),
         contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        item { Heading("Your inbox", "Verified files, stored only on this device. Save a copy before uninstalling the app.") }
+        item { Heading("Your inbox", "Verified files from both the optical and direct-link tabs, stored only on this device. Save a copy before uninstalling the app.") }
         item { Eyebrow("${history.size} files · ${formatSize(history.sumOf { it.size })} / 256 MiB") }
         if (history.isEmpty()) item { Note("A clear space for what’s next", "Received files appear here after their SHA-256 checks pass. Head to Receive to scan your first transfer.") }
-        items(history.size, key = { history[it].id }) { ReceiptCard(history[it], vm) }
+        items(history.size, key = { history[it].id }) { ReceiptCard(history[it], actions) }
     }
 }
 
@@ -401,10 +443,29 @@ private fun SettingsScreen(settings: TransferSettings, vm: TransferViewModel, th
     ScreenColumn {
         Heading("Make it yours.", "Fine-tune your optical link. Then find your favorite light.")
         Eyebrow("Transfer preferences")
-        Text("Frame rate · ${settings.fps} fps", style = MaterialTheme.typography.titleMedium)
-        Slider(settings.fps.toFloat(), { vm.settings(settings.copy(fps = it.toInt())) }, valueRange = 2f..20f, steps = 17,
-            modifier = Modifier.semantics { contentDescription = "Frames per second" })
-        Text("A target, not a guarantee. Slower is easier for older cameras.", style = MaterialTheme.typography.bodySmall)
+        Text("Frame rate · ${FpsScale.label(settings.fpsTenths)}", style = MaterialTheme.typography.titleMedium)
+        Slider(
+            value = FpsScale.tenthsToPosition(settings.fpsTenths),
+            onValueChange = { position ->
+                vm.settings(settings.copy(fpsTenths = FpsScale.positionToTenths(position)))
+            },
+            onValueChangeFinished = { vm.flushSettings() },
+            valueRange = 0f..1f,
+            modifier = Modifier.semantics { contentDescription = "Frames per second" },
+        )
+        Text(
+            "0.1 to 20 frames per second, in tenths of a frame. The slider is stretched at the slow end so " +
+                "every tenth is reachable. Slower is easier for older cameras.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (FpsScale.isVerySlow(settings.fpsTenths)) {
+            Note(
+                "Very slow rate",
+                "At ${FpsScale.label(settings.fpsTenths)} a single QR code is on screen for " +
+                    "${FpsScale.framePeriodMillis(settings.fpsTenths) / 1000} seconds. That is kind to a poor camera " +
+                    "but a large file will take a very long time — use it to get a stubborn transfer started, then speed up.",
+            )
+        }
         Text("QR density", style = MaterialTheme.typography.titleMedium)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(512 to "Easy", 1024 to "Balanced", 2048 to "Dense").forEach { (bytes, label) ->
@@ -422,8 +483,16 @@ private fun SettingsScreen(settings: TransferSettings, vm: TransferViewModel, th
             Switch(settings.brighten, { vm.settings(settings.copy(brighten = it)) })
         }
         ThemePanel(theme)
-        Note("About LightBridge · 1.0.0", "Native Kotlin + Jetpack Compose. Material You by Youniversal. MIT-licensed fountain protocol ported from Decimen Optical Transfer v0.3.0. Not affiliated with or endorsed by Decimen.")
-        Note("Privacy & storage", "No network permission, analytics, accounts, or ads. Camera frames exist only during decoding. Verified files stay in the private inbox until you delete them or uninstall. Android backup is disabled. Sharing hands a file to the app you choose, which may use a network.")
+        Note("About LightBridge · 0.2.0", "Native Kotlin + Jetpack Compose. Material You by Youniversal. MIT-licensed fountain protocol ported from Decimen Optical Transfer v0.3.0. Not affiliated with or endorsed by Decimen.")
+        Note(
+            "Privacy & storage",
+            "No analytics, no accounts, no ads and no servers. The optical tab needs no network permission at all. " +
+                "The Link tab declares the network permission Android requires for any socket, and uses it only for the " +
+                "direct Wi-Fi Direct link: connections are refused unless the peer is a literal address on the peer-to-peer " +
+                "range, so the app cannot reach the internet even in principle. Camera frames exist only while decoding. " +
+                "Verified files stay in the private inbox until you delete them or uninstall. Android backup is disabled. " +
+                "Sharing hands a file to the app you choose, which may use a network.",
+        )
         Note("Compatibility", "Uses Decimen’s D1 0C frames and DCF2 containers. Supports gzip, binary QR, fountain recovery, filename/type preservation and SHA-256. This native version does not export APNG animations, play received media, or include the web project’s translations and diagnostics tools.")
         TextButton({ licenses = context.assets.open("licenses/NOTICE.txt").bufferedReader().use { it.readText() } }) { Text("Open-source licenses & attribution") }
     }
@@ -434,7 +503,7 @@ private fun SettingsScreen(settings: TransferSettings, vm: TransferViewModel, th
 
 /** Restore the user's window brightness and wake policy when leaving or backgrounding. */
 @Composable
-private fun KeepAwake(enabled: Boolean, brighten: Boolean) {
+internal fun KeepAwake(enabled: Boolean, brighten: Boolean) {
     val view = LocalView.current
     val activity = androidx.activity.compose.LocalActivity.current
     val lifecycle = LocalLifecycleOwner.current

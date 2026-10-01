@@ -18,7 +18,16 @@ adb install -r "$apk"
 
 dump="$(adb shell dumpsys package "$pkg")"
 if grep -qE 'flags=\[.*DEBUGGABLE' <<<"$dump"; then echo "::error::installed release APK is debuggable"; exit 1; fi
-grep -q 'android.permission.INTERNET' <<<"$dump" && { echo "::error::INTERNET granted/requested on device"; exit 1; }
+# INTERNET is expected now (Android requires it for the direct-link socket). What must not appear is
+# any capability that would widen it: background location, storage, package-install, overlay, audio.
+for bad in ACCESS_BACKGROUND_LOCATION MANAGE_EXTERNAL_STORAGE REQUEST_INSTALL_PACKAGES SYSTEM_ALERT_WINDOW RECORD_AUDIO QUERY_ALL_PACKAGES; do
+  grep -q "android.permission.$bad" <<<"$dump" && { echo "::error::$bad present on device"; exit 1; } || true
+done
+# The location permission may exist only in its capped, discovery-only form.
+if grep -q 'android.permission.ACCESS_FINE_LOCATION' <<<"$dump"; then
+  grep -q 'ACCESS_FINE_LOCATION.*maxSdkVersion' <<<"$dump" ||     { echo "::error::ACCESS_FINE_LOCATION is uncapped on device"; exit 1; }
+fi
+echo "posture: network permission scoped to the peer-to-peer Link tab; no widened capabilities present"
 
 adb shell pm grant "$pkg" android.permission.CAMERA || true
 adb logcat -c

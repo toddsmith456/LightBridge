@@ -9,7 +9,7 @@ inside `release.yml` before anything is signed.
 - [x] `:transfer:test` golden upstream fingerprints and loss/reordering tests pass.
 - [x] Theme and app unit tests, `lintDebug` + `lintRelease`, debug and minified release builds pass.
 - [x] Compose smoke tests pass on emulators: Android 7 (API 24), 12 (31), 15 (35), 16 (36).
-- [x] Packaged-manifest gate: no INTERNET, permissions limited to CAMERA, only the launcher activity (and the
+- [x] Packaged-manifest gate: permissions allowlisted, INTERNET scoped to the peer-to-peer Link tab, only the launcher activity (and the
       DUMP-guarded profile installer) exported, not debuggable, backup/cleartext off (`tools/release/manifest_gate.py`).
 - [x] Dependency advisories (OSV) and licenses on the shipped classpath: none open, all Apache-2.0/BSD
       (`tools/release/dependency_audit.py`; inventory is attached to each release).

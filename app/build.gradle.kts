@@ -60,6 +60,7 @@ kotlin {
 dependencies {
     implementation(project(":youniversal"))
     implementation(project(":transfer"))
+    implementation(project(":link"))
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.1")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.1")
     implementation("androidx.camera:camera-camera2:1.4.2")

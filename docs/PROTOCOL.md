@@ -39,6 +39,96 @@ chosen only if it saves more than 64 bytes. Verify size, gzip bound, FNV, and SH
 before exposing a file. Filenames are reduced to safe basenames and length-limited.
 Internal files use UUIDs, never sender-controlled filesystem paths.
 
+## Direct link (Link tab)
+
+The optical path above is a one-way broadcast: the receiver never talks back, so there is nothing to
+authenticate against and anyone with a camera can decode it. The Link tab is the other half of the
+app — a two-way, authenticated, encrypted channel between exactly two paired devices, carried over a
+Wi-Fi Direct socket. `docs/SECURITY.md` covers the threat model; this section covers the wire.
+
+Everything below is implemented in the dependency-free `:link` module, so CI runs it as plain JVM
+code (`./gradlew :link:test`, 65 tests).
+
+### 1. Pairing (the QR code)
+
+The host creates a Wi-Fi Direct group, binds a listener, and shows a single QR code:
+
+```
+LBWIFI1:<base64url of ConnectPayload>
+```
+
+`ConnectPayload` carries the session id (16 random bytes), the group SSID, the group passphrase, the
+host's Wi-Fi Direct device address, the owner address and port, the host's **ephemeral** public key,
+and the host's **long-term** identity public key plus its fingerprint. Nothing in it is secret: the
+QR code is how the joiner learns where to connect, and the passphrase only saves the joiner from
+having to negotiate the group itself.
+
+A contact paired this way is stored as `{name, address, identity key, fingerprint, trust}` in the
+app's private preferences, so a later transfer needs no QR code at all.
+
+### 2. Handshake (plaintext, then not)
+
+Two records — `u16` length prefix, then the body — are exchanged *before* the secure channel opens,
+because there is not yet a key to encrypt them with:
+
+1. **Hello** (joiner → host): session id, joiner ephemeral public key, joiner identity public key,
+   joiner device name, and an ECDSA signature over the transcript so far.
+2. **Accept** (host → joiner): the host's identity public key and its signature over the same
+   transcript, which includes the joiner's ephemeral key.
+
+Both sides then compute the shared secret with ephemeral ECDH (P-256), run it through HKDF-SHA256,
+and derive **two directional AES-256-GCM keys** — one per direction, so a record reflected back at
+its sender cannot authenticate. The long-term identity keys never encrypt anything; they only sign,
+which is what gives each session forward secrecy.
+
+The handshake is also where a joiner pinned in the contacts list is checked: if the scanned key does
+not match the stored key for that device name, the session stops before a byte of file data exists.
+
+### 3. The six-digit SAS
+
+Both sides derive a six-digit short authentication string from the handshake transcript and display
+it. **No offer, chunk, or verification record is sent until each side has received the other's
+`Confirm(sas)`.** A relay that terminates the link on both ends cannot avoid this: it has to run
+separate key exchanges with each device, so the two humans see two different codes. The comparison,
+not the cryptography, is what turns "encrypted to somebody" into "encrypted to the right device".
+
+### 4. Records after the channel opens
+
+Every record is `u32` length + `u8` direction + `u64` counter, with the length, direction and counter
+all inside the AES-GCM associated data. Consequences, all enforced rather than hoped for:
+
+- reordering is rejected, so a relay cannot shuffle or replay chunks;
+- the counter is part of the tag, so a chunk cannot be relocated to another position in the file;
+- a record that fails authentication tears the session down instead of being skipped.
+
+### 5. Messages
+
+| Message | Direction | Meaning |
+| --- | --- | --- |
+| `Hello` / `Accept` | both | handshake, see above |
+| `Confirm(sas)` | both | "the digits match on my screen" |
+| `Offer` | sender → receiver | name, size, MIME, SHA-256 |
+| `Accept` / `Decline` | receiver → sender | receiver's decision, including its own disk limits |
+| `Chunk` | sender → receiver | file bytes, bounded by the same size ceilings as the optical path |
+| `Complete` | sender → receiver | last chunk, so the receiver can hash |
+| `Verified` | receiver → sender | hash matched and the file is in the inbox |
+| `Failure` | either | human-readable reason, ends the session |
+| `Bye` | either | orderly close |
+
+The receiver writes directly into the app's private inbox (`filesDir/received`) with a sanitised
+filename, so a received file appears in the Inbox tab alongside camera-received ones, tagged with
+which path it arrived by. A `Verified` record is only sent after the SHA-256 of what landed on disk
+matches the `Offer`.
+
+### 6. Network reach
+
+`LinkAddressPolicy` accepts only literal addresses in `192.168.49.0/24`, `169.254.0.0/16` or
+`fe80::/10`, and rejects hostnames, scoped addresses, ports, and URL-shaped strings outright. The
+inbound side re-checks every accepted socket against the same policy, because the host may fall back
+to binding the wildcard address when the P2P interface does not exist yet. This is what makes the
+`INTERNET` permission the manifest has to declare a permission the app cannot actually use for
+anything but the two paired devices.
+
 ## Resource and integrity limits
 
 - Original file ≤64 MiB; container ≤64 MiB + maximum protocol metadata.

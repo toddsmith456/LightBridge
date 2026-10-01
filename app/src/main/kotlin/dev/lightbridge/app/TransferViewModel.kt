@@ -3,6 +3,8 @@ package dev.lightbridge.app
 
 import android.app.Application
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -16,32 +18,37 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import org.json.JSONObject
-import java.io.File
 import java.security.SecureRandom
-import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 
-internal data class TransferSettings(val fps: Int = 8, val blockSize: Int = 1024, val tiles: Int = 1, val brighten: Boolean = true)
+/** Frame rate is stored in tenths, so 0.1 fps is exact and nothing depends on float equality. */
+internal data class TransferSettings(
+    val fpsTenths: Int = FpsScale.DEFAULT_TENTHS,
+    val blockSize: Int = 1024,
+    val tiles: Int = 1,
+    val brighten: Boolean = true,
+)
 internal data class Sending(val name: String, val originalSize: Int, val compressed: Boolean, val encoder: FountainEncoder) {
     val sequence = AtomicInteger(0)
 }
-internal data class Receipt(val id: String, val name: String, val mime: String, val size: Long, val hash: String, val time: Long)
 internal data class Reception(
     val stream: StreamId? = null, val frames: Int = 0, val solved: Int = 0,
     val receipt: Receipt? = null, val error: String? = null, val differentStream: Boolean = false,
 )
 internal data class TransferState(
-    val maxFileBytes: Int = MAX_FILE_BYTES, val busy: Boolean = false, val sending: Sending? = null, val reception: Reception = Reception(),
-    val history: List<Receipt> = emptyList(), val settings: TransferSettings = TransferSettings(), val message: String? = null,
+    val maxFileBytes: Int = MAX_FILE_BYTES, val busy: Boolean = false, val sending: Sending? = null,
+    val reception: Reception = Reception(), val settings: TransferSettings = TransferSettings(),
+    val message: String? = null,
 )
 
 internal class TransferViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences("transfer", 0)
+    private val inboxStore: InboxStore = LightBridgeApplication.inbox(application)
+
     private val initialSettings = TransferSettings(
-        prefs.getInt("fps", 8).coerceIn(2, 20),
+        // Tenths first; an install from before the slider had tenths stored whole frames per second.
+        prefs.getInt("fps_tenths", -1).takeIf { it in FpsScale.MIN_TENTHS..FpsScale.MAX_TENTHS }
+            ?: FpsScale.fromWholeFps(prefs.getInt("fps", 8)),
         prefs.getInt("block", 1024).takeIf { it in listOf(512, 1024, 2048) } ?: 1024,
         prefs.getInt("tiles", 1).takeIf { it in listOf(1, 2, 4) } ?: 1,
         prefs.getBoolean("brighten", true),
@@ -53,12 +60,16 @@ internal class TransferViewModel(application: Application) : AndroidViewModel(ap
     private val epoch = AtomicInteger(0)
     private data class Scanned(val epoch: Int, val bytes: ByteArray)
     private val scans = Channel<Scanned>(16)
-    private val storageMutex = Mutex()
-    private val directory = File(application.filesDir, "received").apply { mkdirs() }
     private var prepareJob: Job? = null
 
+    // Settings are written at most once per coalescing window: a slider drag must not queue a
+    // SharedPreferences commit for every frame it moves.
+    private val handler = Handler(Looper.getMainLooper())
+    private val pendingSettings = arrayOfNulls<TransferSettings>(1)
+    private val flushSettings = Runnable { writePendingSettings() }
+
     init {
-        viewModelScope.launch { refreshHistory() }
+        viewModelScope.launch { inboxStore.refresh() }
         viewModelScope.launch(Dispatchers.Default) {
             var decoder: FountainDecoder? = null
             var localEpoch = -1
@@ -93,7 +104,6 @@ internal class TransferViewModel(application: Application) : AndroidViewModel(ap
                         updateReception(scan.epoch) { it.copy(receipt = receipt) }
                         finished = true
                         decoder = null
-                        refreshHistory()
                     }
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) {
@@ -119,11 +129,25 @@ internal class TransferViewModel(application: Application) : AndroidViewModel(ap
     fun cameraError(message: String) { mutable.update { it.copy(reception = it.reception.copy(error = message)) } }
     fun clearMessage() { mutable.update { it.copy(message = null) } }
     fun message(value: String) { mutable.update { it.copy(message = value) } }
+
     fun settings(value: TransferSettings) {
-        prefs.edit().putInt("fps", value.fps).putInt("block", value.blockSize)
-            .putInt("tiles", value.tiles).putBoolean("brighten", value.brighten).apply()
         mutable.update { it.copy(settings = value) }
+        pendingSettings[0] = value
+        handler.removeCallbacks(flushSettings)
+        handler.postDelayed(flushSettings, SETTINGS_WRITE_DELAY_MS)
     }
+
+    /** Persists the newest settings immediately; called when the app leaves the foreground. */
+    fun flushSettings() = writePendingSettings()
+
+    private fun writePendingSettings() {
+        handler.removeCallbacks(flushSettings)
+        val value = pendingSettings[0] ?: return
+        pendingSettings[0] = null
+        prefs.edit().putInt("fps_tenths", value.fpsTenths).putInt("block", value.blockSize)
+            .putInt("tiles", value.tiles).putBoolean("brighten", value.brighten).apply()
+    }
+
     fun clearSender() {
         prepareJob?.cancel()
         mutable.update { it.copy(sending = null, busy = false) }
@@ -178,77 +202,40 @@ internal class TransferViewModel(application: Application) : AndroidViewModel(ap
             ))
         }
     }
-    private suspend fun persist(file: OpticalFile): Receipt = withContext(Dispatchers.IO) {
-        storageMutex.withLock {
-            val used = directory.listFiles()?.filter { it.extension == "bin" }?.sumOf { it.length() } ?: 0
-            require(used + file.bytes.size <= 256L * 1024 * 1024) { "Inbox is full (256 MiB). Save and delete older files, then retry." }
-            require(directory.usableSpace > file.bytes.size + 16L * 1024 * 1024) { "Not enough free storage." }
-            val receipt = Receipt(UUID.randomUUID().toString(), file.name, safeMime(file.mime), file.bytes.size.toLong(), file.digest.hex(), System.currentTimeMillis())
-            val target = receivedFile(receipt)
-            val temp = File(directory, "${receipt.id}.part")
-            try {
-                temp.outputStream().use { it.write(file.bytes); it.fd.sync() }
-                check(temp.renameTo(target)) { "Could not finalize received file." }
-                val metadata = JSONObject().put("id", receipt.id).put("name", receipt.name).put("mime", receipt.mime)
-                    .put("size", receipt.size).put("hash", receipt.hash).put("time", receipt.time)
-                val metaTemp = File(directory, "${receipt.id}.json.part")
-                metaTemp.writeText(metadata.toString())
-                check(metaTemp.renameTo(File(directory, "${receipt.id}.json"))) { "Could not save file metadata." }
-                receipt
-            } catch (e: Exception) {
-                temp.delete(); target.delete(); File(directory, "${receipt.id}.json.part").delete()
-                throw e
-            }
-        }
-    }
-    private suspend fun refreshHistory() = withContext(Dispatchers.IO) {
-        storageMutex.withLock {
-            // A killed process can leave a temp file or a finalized payload without metadata.
-            directory.listFiles()?.filter { it.name.endsWith(".part") ||
-                (it.extension == "bin" && !File(directory, "${it.nameWithoutExtension}.json").exists())
-            }?.forEach { it.delete() }
-            val receipts = directory.listFiles()?.filter { it.extension == "json" }?.mapNotNull { f ->
-                runCatching {
-                    val o = JSONObject(f.readText())
-                    val id = o.getString("id")
-                    require(UUID.fromString(id).toString() == id && f.name == "$id.json")
-                    Receipt(id, safeName(o.getString("name")), o.getString("mime"), o.getLong("size"), o.getString("hash"), o.getLong("time"))
-                        .takeIf { receivedFile(it).isFile }
-                }.getOrNull()
-            }?.sortedByDescending { it.time } ?: emptyList()
-            mutable.update { it.copy(history = receipts) }
-        }
-    }
-    fun receivedFile(receipt: Receipt): File {
-        require(UUID.fromString(receipt.id).toString() == receipt.id)
-        return File(directory, "${receipt.id}.bin")
-    }
+
+    /** Stores an optical transfer. The container digest was verified by the decoder. */
+    private suspend fun persist(file: OpticalFile): Receipt =
+        inboxStore.storeBytes(file.name, safeMime(file.mime), file.bytes, file.digest.hex(), Receipt.Source.Light)
+
+    fun receivedFile(receipt: Receipt): java.io.File = inboxStore.receivedFile(receipt)
+
     fun save(receipt: Receipt, uri: Uri) {
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    storageMutex.withLock {
-                        getApplication<Application>().contentResolver.openOutputStream(uri, "wt")?.use { output ->
-                            receivedFile(receipt).inputStream().use { it.copyTo(output) }
-                        } ?: error("Could not open the selected destination.")
-                    }
-                }
+                inboxStore.save(receipt, uri, getApplication<Application>().contentResolver)
                 message("Saved ${receipt.name}")
             } catch (e: Exception) { message(e.message ?: "Could not save file.") }
         }
     }
     fun delete(receipt: Receipt) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                storageMutex.withLock {
-                    val file = receivedFile(receipt)
-                    if (file.exists() && !file.delete()) { message("Could not delete file."); return@withLock }
-                    File(directory, "${receipt.id}.json").delete()
-                    mutable.update { it.copy(reception = if (it.reception.receipt?.id == receipt.id) Reception() else it.reception) }
-                }
-            }
-            refreshHistory()
+            try {
+                inboxStore.delete(receipt)
+                mutable.update { it.copy(reception = if (it.reception.receipt?.id == receipt.id) Reception() else it.reception) }
+            } catch (e: Exception) { message(e.message ?: "Could not delete file.") }
         }
     }
-    override fun onCleared() { scans.close(); super.onCleared() }
+
+    /** The inbox is shared with the Wi-Fi Direct path. */
+    val inbox: InboxStore get() = inboxStore
+
+    override fun onCleared() {
+        writePendingSettings()
+        scans.close()
+        super.onCleared()
+    }
+
+    private companion object {
+        const val SETTINGS_WRITE_DELAY_MS = 400L
+    }
 }

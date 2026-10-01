@@ -42,7 +42,7 @@ git tag v0.1.0 && git push origin v0.1.0     # tag must be on main, vMAJOR.MINOR
 
 | Job | Gate |
 | --- | --- |
-| `validate` | tag on `main`; palette parity; `:transfer:test`, theme + app unit tests; `lintDebug`, `lintRelease`; minified release build; **manifest gate** (no INTERNET, allowlisted permissions/exported components, no debuggable/cleartext/backup); **dependency audit** (OSV advisories + license allowlist, unreachable OSV = failure); packaged version equals the tag |
+| `validate` | tag on `main`; palette parity; `:transfer:test`, theme + app unit tests; `lintDebug`, `lintRelease`; minified release build; **manifest gate** (allowlisted permissions and exported components; INTERNET tolerated only alongside the Wi-Fi Direct permissions, with an explicit deny list for anything that widens reach; no debuggable/cleartext/backup); **dependency audit** (OSV advisories + license allowlist, unreachable OSV = failure); packaged version equals the tag |
 | `sign` | all four secrets and the pinned fingerprint present; `zipalign`; `apksigner` v1+v2+v3; **verify**: exactly one signer, not a debug certificate, SHA-256 equals the pinned fingerprint |
 | `device` | the *signed* APK is installed, upgraded in place, launched, rotated and backgrounded on Android 7 (24), 12 (31), 15 (35) and 16 (36) emulators; no crash/ANR; not debuggable; a debug-signed build is **rejected** over it (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`) |
 | `publish` | GitHub Release with `LightBridge-X.Y.Z.apk`, `.sha256`, R8 mapping, dependency inventory |

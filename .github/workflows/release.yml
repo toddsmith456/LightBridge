@@ -50,7 +50,7 @@ jobs:
           python3 tools/palette_lab.py --verify
       - name: Tests, lint and minified unsigned release
         run: >
-          ./gradlew :transfer:test :youniversal:testDebugUnitTest :app:testDebugUnitTest
+          ./gradlew :link:test :transfer:test :youniversal:testDebugUnitTest :app:testDebugUnitTest
           :app:lintDebug :app:lintRelease :app:assembleDebug :app:assembleRelease --stacktrace
           -Plightbridge.versionName=${{ steps.v.outputs.version }}
           -Plightbridge.versionCode=${{ steps.v.outputs.code }}

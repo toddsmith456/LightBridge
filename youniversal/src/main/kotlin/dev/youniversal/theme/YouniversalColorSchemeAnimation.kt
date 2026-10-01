@@ -10,7 +10,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.toArgb
 
 /**
  * Interpolates every color role of this scheme toward [other].
@@ -84,8 +86,12 @@ internal fun rememberAnimatedColorScheme(
     var to by remember { mutableStateOf(target) }
     val progress = remember { Animatable(1f) }
 
-    LaunchedEffect(target) {
-        if (target != to) {
+    // Keyed on the *content* of the scheme rather than on the instance. ColorScheme has no value
+    // equality, so a recomposition that rebuilds an identical scheme used to look like a theme
+    // change: it restarted this animation (and repainted every role) on every settings tick.
+    val fingerprint = target.youniversalFingerprint()
+    LaunchedEffect(fingerprint) {
+        if (fingerprint != to.youniversalFingerprint()) {
             from = to
             to = target
             progress.snapTo(0f)
@@ -95,4 +101,30 @@ internal fun rememberAnimatedColorScheme(
 
     val fraction = progress.value
     return if (fraction >= 1f) to else from.youniversalBlend(to, fraction)
+}
+
+/**
+ * Cheap content hash of all 48 roles, used as an animation key and to answer "did the theme really
+ * change?". Pure arithmetic — no conversion to another colour space.
+ */
+internal fun ColorScheme.youniversalFingerprint(): Long {
+    var hash = 0x9E3779B97F4A7C15uL.toLong()
+    fun mix(color: Color) {
+        val argb = color.toArgb().toLong() and 0xFFFFFFFFL
+        hash = hash xor argb
+        hash *= 0x100000001B3L
+    }
+    mix(primary); mix(onPrimary); mix(primaryContainer); mix(onPrimaryContainer); mix(inversePrimary)
+    mix(secondary); mix(onSecondary); mix(secondaryContainer); mix(onSecondaryContainer)
+    mix(tertiary); mix(onTertiary); mix(tertiaryContainer); mix(onTertiaryContainer)
+    mix(background); mix(onBackground); mix(surface); mix(onSurface)
+    mix(surfaceVariant); mix(onSurfaceVariant); mix(surfaceTint); mix(inverseSurface); mix(inverseOnSurface)
+    mix(error); mix(onError); mix(errorContainer); mix(onErrorContainer)
+    mix(outline); mix(outlineVariant); mix(scrim)
+    mix(surfaceBright); mix(surfaceDim); mix(surfaceContainer); mix(surfaceContainerHigh)
+    mix(surfaceContainerHighest); mix(surfaceContainerLow); mix(surfaceContainerLowest)
+    mix(primaryFixed); mix(primaryFixedDim); mix(onPrimaryFixed); mix(onPrimaryFixedVariant)
+    mix(secondaryFixed); mix(secondaryFixedDim); mix(onSecondaryFixed); mix(onSecondaryFixedVariant)
+    mix(tertiaryFixed); mix(tertiaryFixedDim); mix(onTertiaryFixed); mix(onTertiaryFixedVariant)
+    return hash
 }

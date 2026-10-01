@@ -20,3 +20,5 @@ include(":youniversal")
 include(":app")
 
 include(":transfer")
+
+include(":link")

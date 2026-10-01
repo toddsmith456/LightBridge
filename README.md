@@ -2,9 +2,20 @@
 
 **A little light. A direct connection.**
 
-An offline Android file-transfer app built in Kotlin and Jetpack Compose. One device
-shows animated QR codes; another reconstructs the file with its camera. No accounts,
-network, Bluetooth, server, or pairing. The app does not request Internet permission.
+An Android file-transfer app built in Kotlin and Jetpack Compose, with two ways to move a file
+between two devices and no server in either of them.
+
+**Optical.** One device shows animated QR codes; another reconstructs the file with its camera.
+No accounts, no network, no Bluetooth, no pairing — this path works in airplane mode and needs no
+network permission at all.
+
+**Direct link.** The other device is paired once by QR code and the file then travels over Wi-Fi
+Direct, encrypted end to end (ephemeral ECDH P-256, long-term ECDSA identity, HKDF-SHA256,
+AES-256-GCM per direction, and a six-digit short authentication string both sides must confirm
+before a single byte of the file moves). Android requires the `INTERNET` permission for *any*
+socket, so the app now declares it — and refuses every address outside the peer-to-peer range at
+runtime, so there is still no code path to a network. See
+[docs/SECURITY.md](docs/SECURITY.md).
 
 LightBridge combines the MIT-licensed **Youniversal** Material You theme system with a
 native Kotlin port of **Decimen Optical Transfer v0.3.0**'s MIT-licensed wire protocol.
@@ -18,9 +29,17 @@ This is an independent application, not an official Decimen product.
 - FNV-1a container verification **and SHA-256 file verification** before saving anything.
 - On-device **CameraX + ZXing** receiver; no proprietary or downloaded scanner models.
   Rear camera with front-camera fallback, torch (when available), and zoom.
-- Adjustable 2–20 fps target, three QR densities, and one/two/four displayed QR codes.
-- Verified-file inbox (256 MiB limit), Save As through Android's Storage Access Framework,
-  and explicit sharing through a narrowly scoped FileProvider.
+- Adjustable **0.1–20 fps** target in tenths of a frame (the slider is stretched at the slow end so
+  every tenth is reachable), three QR densities, and one/two/four displayed QR codes.
+- **One inbox for both paths** (256 MiB limit): a file received by camera or over the direct link
+  lands in the same list, tagged with how it arrived, with Save As through Android's Storage Access
+  Framework and explicit sharing through a narrowly scoped FileProvider.
+- **Link tab**: QR-code contact pairing, mutual six-digit SAS confirmation before any file data
+  flows, per-peer keys and trust state, device rename/forget, live progress, and a receipt that goes
+  straight to the inbox on arrival.
+- Settings changes are coalesced (400 ms) and the theme's colour morph is keyed on a content
+  fingerprint, so dragging any slider — theme, contrast, or frame rate — no longer rebuilds the
+  wallpaper palette or restarts a 48-role blend on every tick.
 - All Youniversal controls: system/light/dark/cream backgrounds, Android 12+ Material You,
   seed accents, contrast, corner radius, text scale, animation, reset, and theme opt-out.
 - Adaptive launcher icon with Android 13+ themed monochrome support.
@@ -37,6 +56,13 @@ This is an independent application, not an official Decimen product.
 3. On the other device, choose **Receive**, allow the camera, and point at the full QR.
 4. Keep sending until the receiver says **Every byte, verified**. Use **Save as…** or
    **Share**. Then tap **Finish** on the sender; there is no return channel.
+
+Or, when both devices support Wi-Fi Direct:
+
+1. On the sender, open **Link → Share a QR code**. On the receiver, **Link → Scan a QR code**.
+2. Compare the six digits on both screens; both people tap **They match**.
+3. Pick a file. It is encrypted to that device, sent directly, verified, and dropped into the
+   Inbox tab. A paired contact can be reused later without scanning again.
 
 Start with one Balanced QR at 8 fps. Try Easy and 4 fps if decoding is unreliable.
 Use Dense for large files: the protocol's 65,535-block ceiling limits incompressible

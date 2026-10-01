@@ -104,7 +104,11 @@ public fun YouniversalTheme(
 ) {
     val systemDark = isSystemInDarkTheme()
     val resolvedStyle = backgroundStyle.resolve(systemDark)
-    val extendedColors = youniversalExtendedColors(resolvedStyle, systemDark)
+    // Rebuilding these two on every recomposition was the main cost of moving a settings slider:
+    // this wrapper recomposes for every theme property, and a wallpaper palette is not cheap.
+    val extendedColors = remember(resolvedStyle, systemDark) {
+        youniversalExtendedColors(resolvedStyle, systemDark)
+    }
 
     if (!enabled) {
         // Switched off: keep the locals valid for any Youniversal component still in the tree, but
@@ -122,12 +126,16 @@ public fun YouniversalTheme(
     val context = LocalContext.current
     val hasCustomSeed = accentSeed != Color.Unspecified
 
-    // Material You: wallpaper-derived scheme, Android 12 and up.
+    // Material You: wallpaper-derived scheme, Android 12 and up. Computed once per relevant change —
+    // dynamicXColorScheme() reads the system palette and builds ~48 roles, which must never happen
+    // on a recomposition triggered by an unrelated setting.
     val dynamicScheme: ColorScheme? =
-        if (dynamicColor && !hasCustomSeed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (resolvedStyle.isDark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        } else {
-            null
+        remember(context, resolvedStyle, dynamicColor, hasCustomSeed) {
+            if (dynamicColor && !hasCustomSeed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (resolvedStyle.isDark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+            } else {
+                null
+            }
         }
 
     val targetScheme = remember(resolvedStyle, contrast, accentSeed, hasCustomSeed, dynamicScheme, systemDark) {

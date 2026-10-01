@@ -3,6 +3,8 @@ package dev.youniversal.theme
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.mutableStateOf
@@ -19,6 +21,11 @@ import androidx.compose.ui.text.font.FontFamily
  * Properties are read-only and observable; the `set…` functions are the mutators, because they
  * also write the new value to disk. (Making the properties `var` with a private setter would
  * generate a synthetic `setEnabled` that collides with the explicit one on the JVM.)
+ *
+ * Writes are coalesced: a slider drag changes a value 60 times a second, and committing every one
+ * of those to `SharedPreferences` was visible as jank. Compose state still updates immediately (the
+ * UI is live), while at most one editor is applied per [WRITE_DELAY_MS]. Call [flushWrites] from
+ * `onPause` so nothing is lost when the app leaves the foreground.
  *
  * ```
  * val themeState = rememberYouniversalThemeState()
@@ -87,51 +94,48 @@ public class YouniversalThemeState internal constructor(context: Context) {
 
     public fun setEnabled(value: Boolean) {
         enabledState.value = value
-        preferences.edit().putBoolean(KEY_ENABLED, value).apply()
+        scheduleWrite(KEY_ENABLED, value)
     }
 
     public fun setBackgroundStyle(value: YouniversalBackgroundStyle) {
         backgroundStyleState.value = value
-        preferences.edit().putString(KEY_STYLE, value.name).apply()
+        scheduleWrite(KEY_STYLE, value.name)
     }
 
     public fun setDynamicColor(value: Boolean) {
         dynamicColorState.value = value
-        preferences.edit().putBoolean(KEY_DYNAMIC, value).apply()
+        scheduleWrite(KEY_DYNAMIC, value)
     }
 
     public fun setContrast(value: YouniversalContrast) {
         contrastState.value = value
-        preferences.edit().putString(KEY_CONTRAST, value.name).apply()
+        scheduleWrite(KEY_CONTRAST, value.name)
     }
 
     /** Pass [Color.Unspecified] to clear the seed and return to the Youniversal accent. */
     public fun setAccentSeed(value: Color) {
         accentSeedState.value = value
-        val editor = preferences.edit()
-        if (value == Color.Unspecified) {
-            editor.remove(KEY_SEED)
-        } else {
-            editor.putLong(KEY_SEED, value.toArgb().toLong() and 0xFFFFFFFFL)
-        }
-        editor.apply()
+        scheduleWrite(
+            KEY_SEED,
+            if (value == Color.Unspecified) null else value.toArgb().toLong() and 0xFFFFFFFFL,
+        )
     }
 
     public fun setCornerScale(value: Float) {
         val coerced = value.coerceIn(0f, 2f)
         cornerScaleState.value = coerced
-        preferences.edit().putFloat(KEY_CORNERS, coerced).apply()
+        scheduleWrite(KEY_CORNERS, coerced)
     }
 
     public fun setFontScale(value: Float) {
         val coerced = value.coerceIn(0.7f, 2f)
         fontScaleState.value = coerced
-        preferences.edit().putFloat(KEY_FONT_SCALE, coerced).apply()
+        scheduleWrite(KEY_FONT_SCALE, coerced)
     }
 
     public fun setAnimateTransitions(value: Boolean) {
         animateTransitionsState.value = value
-        preferences.edit().putBoolean(KEY_ANIMATE, value).apply()
+        scheduleWrite(KEY_ANIMATE, value)
     }
 
     public fun setFontFamily(value: FontFamily?) {
@@ -140,6 +144,8 @@ public class YouniversalThemeState internal constructor(context: Context) {
 
     /** Returns every persisted setting to its default. [fontFamily] is cleared too. */
     public fun reset() {
+        pendingWrites.clear()
+        handler.removeCallbacks(flushPending)
         preferences.edit().clear().apply()
         enabledState.value = true
         backgroundStyleState.value = YouniversalBackgroundStyle.Auto
@@ -151,6 +157,44 @@ public class YouniversalThemeState internal constructor(context: Context) {
         animateTransitionsState.value = true
         fontFamilyState.value = null
     }
+
+    // ---------------------------------------------------------------- persistence
+
+    private val handler = Handler(Looper.getMainLooper())
+    private val pendingWrites = LinkedHashMap<String, Any?>()
+    private val flushPending = Runnable { flushWrites() }
+
+    /** Records a value to persist; at most one editor is applied per coalescing window. */
+    private fun scheduleWrite(key: String, value: Any?) {
+        pendingWrites[key] = value
+        handler.removeCallbacks(flushPending)
+        handler.postDelayed(flushPending, WRITE_DELAY_MS)
+    }
+
+    /**
+     * Writes everything that is pending right now.
+     *
+     * Call from `onPause`: a drag that ends as the app is backgrounded must not lose its last value.
+     */
+    public fun flushWrites() {
+        handler.removeCallbacks(flushPending)
+        if (pendingWrites.isEmpty()) return
+        val editor = preferences.edit()
+        for ((key, value) in pendingWrites) {
+            when (value) {
+                null -> editor.remove(key)
+                is Boolean -> editor.putBoolean(key, value)
+                is Float -> editor.putFloat(key, value)
+                is Long -> editor.putLong(key, value)
+                is String -> editor.putString(key, value)
+            }
+        }
+        pendingWrites.clear()
+        editor.apply()
+    }
+
+    /** True when a value is waiting to be written; used by tests and diagnostics. */
+    public val hasPendingWrites: Boolean get() = pendingWrites.isNotEmpty()
 
     private fun readSeed(): Color {
         if (!preferences.contains(KEY_SEED)) return Color.Unspecified
@@ -172,6 +216,9 @@ public class YouniversalThemeState internal constructor(context: Context) {
         const val KEY_CORNERS = "corner_scale"
         const val KEY_FONT_SCALE = "font_scale"
         const val KEY_ANIMATE = "animate_transitions"
+
+        /** Long enough to swallow a drag, short enough that a crash loses nothing meaningful. */
+        const val WRITE_DELAY_MS = 400L
     }
 }
 

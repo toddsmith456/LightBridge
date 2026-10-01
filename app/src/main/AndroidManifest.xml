@@ -1,8 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.CAMERA" />
+
+    <!--
+      Wi-Fi Direct (the Link tab).
+
+      Android requires INTERNET for *any* socket, including the ones that carry a direct link that
+      never leaves the two devices — this is documented behaviour for the Wi-Fi Direct APIs. The app
+      therefore declares it, and the transport refuses every address outside the peer-to-peer range
+      (see dev.lightbridge.link.LinkAddressPolicy), so there is no code path to the internet.
+      The optical tab still works with no network permission at all.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!-- Android 13+ replaced the location requirement for nearby radios with this narrower one. -->
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
+    <!-- Android 12 and below still gate the peer-to-peer APIs behind location. Both are declared
+         because the platform requires the pair for a fine-grained grant, and both are capped at the
+         last version that needs them; on Android 13+ the app asks for nothing location-shaped. -->
+    <uses-permission
+        android:name="android.permission.ACCESS_COARSE_LOCATION"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="32" />
+
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
-    <application android:allowBackup="false" android:icon="@mipmap/ic_launcher"
+    <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
+    <application android:name=".LightBridgeApplication" android:allowBackup="false" android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name" android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true" android:theme="@style/Theme.Youniversal.Demo">
         <activity android:name=".MainActivity" android:exported="true"
